@@ -1,0 +1,44 @@
+{
+  "schemaVersion": 1,
+  "id": "bhanu.omavideos",
+  "name": "OmaVideos",
+  "version": "1.0.0",
+  "author": "bhanu",
+  "license": "MIT",
+  "description": "Paste a YouTube, Reddit, X, or any video URL to grab it at the best quality with audio.",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "BarWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "OmaVideos",
+    "description": "A download arrow in the bar. Click it, paste any video URL (YouTube, Reddit, X, Vimeo, Twitch…), and it lands in your omavideos folder at the best quality with audio — with optional quality caps, playlist item picking, time-range trimming, and audio-only extraction.",
+    "category": "Media",
+    "allowMultiple": false,
+    "defaultSection": "right",
+    "defaults": {
+      "quality": "best",
+      "audioOnly": false,
+      "playlist": false,
+      "playlistItems": "",
+      "trim": false,
+      "trimStart": "",
+      "trimEnd": "",
+      "downloadDir": "",
+      "ytClient": "web_embedded"
+    },
+    "schema": [
+      { "key": "quality", "type": "enum", "label": "Quality cap", "options": ["Best", "2160p", "1440p", "1080p", "720p"], "defaultValue": "Best", "description": "Best available, or capped at this resolution." },
+      { "key": "audioOnly", "type": "boolean", "label": "Audio only", "defaultValue": false, "description": "Extract the best audio track as high-bitrate m4a instead of video." },
+      { "key": "playlist", "type": "boolean", "label": "Download playlist", "defaultValue": false, "description": "When the URL points to a playlist, download every entry." },
+      { "key": "playlistItems", "type": "string", "label": "Playlist items", "defaultValue": "", "description": "Specific entries, e.g. 1,3,5-8. Empty downloads the whole playlist." },
+      { "key": "trim", "type": "boolean", "label": "Trim time range", "defaultValue": false, "description": "Download only the given slice of the video." },
+      { "key": "trimStart", "type": "string", "label": "Trim start", "defaultValue": "", "description": "Start timestamp, e.g. 1:30 or 00:01:30." },
+      { "key": "trimEnd", "type": "string", "label": "Trim end", "defaultValue": "", "description": "End timestamp, e.g. 2:45 or 00:02:45." },
+      { "key": "downloadDir", "type": "path", "label": "Save folder", "defaultValue": "", "description": "Where downloads land. Empty uses ~/Videos/omavideos." },
+      { "key": "ytClient", "type": "enum", "label": "YouTube client", "options": ["web_embedded", "tv_embedded", "android_vr", "web_safari", "tv", "mweb", "web"], "defaultValue": "web_embedded", "description": "Player client YouTube uses; web_embedded is the most reliable default." }
+    ]
+  }
+}
