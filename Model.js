@@ -39,6 +39,30 @@ function joinPath(dir, name) {
   return d.length > 0 ? d + "/" + name : name
 }
 
+// True when the URL points at a YouTube playlist (a list= query param or a
+// /playlist path), the signal we use to auto-list its videos in the panel.
+function looksLikePlaylist(url) {
+  var u = String(url || "")
+  return /[?&]list=[A-Za-z0-9_-]+/.test(u) || /\/playlist(\?|$)/.test(u)
+}
+
+// "001\t141\tTitle\tID" -> { entryIndex, playlistCount, title, videoId } or null.
+// playlistCount is the total number of entries, printed by --flat-playlist, so
+// the panel can show how much of the listing has loaded.
+function parsePlaylistEntryLine(line) {
+  var parts = String(line || "").split("\t")
+  if (parts.length < 4) return null
+  var idx = parseInt(parts[0], 10)
+  if (!isFinite(idx)) return null
+  var total = parseInt(parts[1], 10)
+  return {
+    entryIndex: idx,
+    playlistCount: isFinite(total) && total > 0 ? total : 0,
+    title: parts[2] || "Untitled",
+    videoId: parts[3] || ""
+  }
+}
+
 function pad2(n) {
   n = Math.floor(n)
   return n < 10 ? "0" + n : String(n)
@@ -79,17 +103,6 @@ function normalizeTimestamp(text) {
     return "00:" + pad2(mn) + ":" + pad2(sc)
   }
   return null
-}
-
-// "1,3,5-8" playlist selection. Returns the compact string, "" for "download
-// everything", or null when the text is not a usable selector.
-function parsePlaylistItems(text) {
-  var t = String(text || "").replace(/\s+/g, "")
-  if (!t) return ""
-  if (!/^[0-9,\-]+$/.test(t)) return null
-  if (!/[0-9]/.test(t)) return null
-  if (/^[,]/.test(t) || /[,]$/.test(t) || /^\-/.test(t) || /[\-]$/.test(t)) return null
-  return t
 }
 
 function looksLikeUrl(text) {

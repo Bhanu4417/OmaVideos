@@ -21,8 +21,6 @@
     "defaults": {
       "quality": "best",
       "audioOnly": false,
-      "playlist": false,
-      "playlistItems": "",
       "trim": false,
       "trimStart": "",
       "trimEnd": "",
@@ -32,8 +30,6 @@
     "schema": [
       { "key": "quality", "type": "enum", "label": "Quality cap", "options": ["Best", "2160p", "1440p", "1080p", "720p"], "defaultValue": "Best", "description": "Best available, or capped at this resolution." },
       { "key": "audioOnly", "type": "boolean", "label": "Audio only", "defaultValue": false, "description": "Extract the best audio track as high-bitrate m4a instead of video." },
-      { "key": "playlist", "type": "boolean", "label": "Download playlist", "defaultValue": false, "description": "When the URL points to a playlist, download every entry." },
-      { "key": "playlistItems", "type": "string", "label": "Playlist items", "defaultValue": "", "description": "Specific entries, e.g. 1,3,5-8. Empty downloads the whole playlist." },
       { "key": "trim", "type": "boolean", "label": "Trim time range", "defaultValue": false, "description": "Download only the given slice of the video." },
       { "key": "trimStart", "type": "string", "label": "Trim start", "defaultValue": "", "description": "Start timestamp, e.g. 1:30 or 00:01:30." },
       { "key": "trimEnd", "type": "string", "label": "Trim end", "defaultValue": "", "description": "End timestamp, e.g. 2:45 or 00:02:45." },

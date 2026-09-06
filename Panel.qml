@@ -6,12 +6,13 @@ import qs.Ui
 import "Model.js" as Model
 
 // OmaVideos download panel. The bar widget owns the button; this panel owns
-// the paste-a-URL flow: options (quality cap, audio-only, playlist, trim),
-// a live yt-dlp progress line, a done/error state, and a compact recent list.
+// the paste-a-URL flow: options (quality cap, audio-only), a live yt-dlp
+// progress line, a done/error state, and a compact recent list.
 //
-// Downloads keep running while the panel is closed — closing only hides the
-// surface, and the bar arrow glows (active color) for as long as a download
-// is in flight.
+// Pasting a URL that points at a YouTube playlist automatically lists its
+// videos so you can grab all of them or just the ones you pick. Downloads
+// keep running while the panel is closed — closing only hides the surface,
+// and the bar icon lights up for as long as a download is in flight.
 Panel {
   id: root
   moduleName: "bhanu.omavideos"
@@ -34,12 +35,19 @@ Panel {
   // ---- settings-backed state ---------------------------------------------
   property string quality: setting("quality", "best")
   property bool audioOnly: boolSetting("audioOnly", false)
-  property bool playlist: boolSetting("playlist", false)
-  property string playlistItems: setting("playlistItems", "")
   property bool trim: boolSetting("trim", false)
   property string trimStart: setting("trimStart", "")
   property string trimEnd: setting("trimEnd", "")
   property string ytClient: setting("ytClient", "web_embedded")
+
+  // ---- playlist state -----------------------------------------------------
+  property bool playlistMode: false
+  property bool playlistLoading: false
+  property int playlistLoaded: 0
+  property int playlistTotal: 0
+  property int playlistCount: 0
+  property int playlistSelectedCount: 0
+  property string lastListedUrl: ""
 
   readonly property string home: Quickshell.env("HOME")
   readonly property string defaultDir: home + "/Videos/omavideos"
@@ -58,7 +66,8 @@ Panel {
   property real dlProgress: 0
   property bool dlIndeterminate: true
   property string dlPhase: ""
-  property string dlPlaylist: ""
+  property int dlPlaylistDone: 0
+  property int dlPlaylistTotal: 0
   property string dlFile: ""
   property string dlError: ""
   property string dlState: "idle"   // idle | running | done | error
@@ -87,18 +96,19 @@ Panel {
       root.bar.shell.updateEntryInline(root.moduleName, entry)
   }
 
-  function toggleChip(key) {
-    if (key === "audioOnly") { root.audioOnly = !root.audioOnly; persist({ audioOnly: root.audioOnly }) }
-    else if (key === "playlist") { root.playlist = !root.playlist; persist({ playlist: root.playlist }) }
-    else if (key === "trim") {
-      root.trim = !root.trim
-      // Switching trim off also clears the saved range, so a later download
-      // can never pick up a leftover start/end pair.
-      persist(root.trim
-        ? { trim: true }
-        : { trim: false, trimStart: "", trimEnd: "" })
-      if (!root.trim) { root.trimStart = ""; root.trimEnd = "" }
-    }
+  function toggleAudio() {
+    root.audioOnly = !root.audioOnly
+    persist({ audioOnly: root.audioOnly })
+  }
+
+  function toggleTrim() {
+    root.trim = !root.trim
+    // Switching trim off also clears the saved range, so a later download
+    // can never pick up a leftover start/end pair.
+    persist(root.trim
+      ? { trim: true }
+      : { trim: false, trimStart: "", trimEnd: "" })
+    if (!root.trim) { root.trimStart = ""; root.trimEnd = "" }
   }
 
   // ---- panel lifecycle -----------------------------------------------------
@@ -109,6 +119,7 @@ Panel {
       root.autoPaste = true
       if (!String(urlField.text).trim()) root.pasteFromClipboard()
       urlField.forceActiveFocus()
+      playlistDebounce.restart()
     })
   }
 
@@ -148,16 +159,32 @@ Panel {
       return
     }
 
+    // Playlist: build the item list from the selection. All selected means a
+    // plain full-playlist download; otherwise pass just the picked entries.
     var items = ""
-    if (root.playlist) {
-      items = Model.parsePlaylistItems(root.playlistItems)
-      if (items === null) {
+    var playlistMode = root.playlistMode && root.playlistCount > 0
+    if (playlistMode) {
+      if (root.playlistLoading) {
         root.dlState = "idle"
-        root.statusHint = "Playlist items must look like 1,3,5-8."
+        root.statusHint = "Loading playlist…"
         return
+      }
+      if (root.playlistSelectedCount === 0) {
+        root.dlState = "idle"
+        root.statusHint = "Select at least one video."
+        return
+      }
+      if (root.playlistSelectedCount < root.playlistCount) {
+        var picked = []
+        for (var i = 0; i < playlistModel.count; i++) {
+          var row = playlistModel.get(i)
+          if (row.selected) picked.push(String(row.entryIndex))
+        }
+        items = picked.join(",")
       }
     }
 
+    // Trim: normalize the optional start/end timestamps.
     var ts = { start: null, end: null }
     if (root.trim) {
       var startText = String(root.trimStart || "").trim()
@@ -177,7 +204,8 @@ Panel {
     root.dlProgress = 0
     root.dlIndeterminate = true
     root.dlPhase = ""
-    root.dlPlaylist = ""
+    root.dlPlaylistDone = 0
+    root.dlPlaylistTotal = 0
     root.dlFile = ""
     root.dlError = ""
     root.dlStatus = "Starting…"
@@ -186,7 +214,7 @@ Panel {
       url: url,
       quality: root.quality,
       audioOnly: root.audioOnly,
-      playlistMode: root.playlist,
+      playlistMode: playlistMode,
       playlistItems: items,
       trim: root.trim,
       trimStart: ts.start,
@@ -223,6 +251,96 @@ Panel {
   function openRecent(entry) {
     if (entry && entry.file) root.openFile(entry.file)
     else root.openFolder()
+  }
+
+  // ---- playlist detection ---------------------------------------------------
+  function maybeRefreshPlaylist() {
+    // While a download runs the playlist context stays frozen — re-listing
+    // would hide the in-flight download behind a fresh "Detecting…" state.
+    if (root.running) return
+    var url = String(urlField.text || "").trim()
+    if (url === root.lastListedUrl && playlistModel.count > 0) return
+    if (Model.looksLikePlaylist(url)) {
+      root.lastListedUrl = url
+      root.playlistMode = true
+      root.playlistLoading = true
+      root.playlistLoaded = 0
+      root.playlistTotal = 0
+      playlistModel.clear()
+      root.playlistCount = 0
+      root.playlistSelectedCount = 0
+      if (!listProc.running) {
+        listProc.command = ["yt-dlp", "--flat-playlist", "--no-warnings", "--print", "%(playlist_index)03d\t%(playlist_count)s\t%(title)s\t%(id)s", url]
+        listProc.running = true
+      }
+    } else {
+      root.lastListedUrl = url
+      root.playlistMode = false
+      root.playlistLoading = false
+      root.playlistLoaded = 0
+      root.playlistTotal = 0
+      playlistModel.clear()
+      root.playlistCount = 0
+      root.playlistSelectedCount = 0
+    }
+  }
+
+  function addPlaylistLine(line) {
+    var entry = Model.parsePlaylistEntryLine(line)
+    if (!entry) return
+    if (entry.playlistCount > 0 && root.playlistTotal === 0) root.playlistTotal = entry.playlistCount
+    playlistModel.append({ entryIndex: entry.entryIndex, title: entry.title, videoId: entry.videoId, selected: true })
+    root.playlistLoaded = playlistModel.count
+  }
+
+  function countSelectedPlaylist() {
+    var n = 0
+    for (var i = 0; i < playlistModel.count; i++) if (playlistModel.get(i).selected) n++
+    return n
+  }
+
+  function togglePlaylistEntry(index) {
+    if (index < 0 || index >= playlistModel.count) return
+    var row = playlistModel.get(index)
+    // Build a fresh object for set(): mutating the get() result in place can
+    // leave the ListView showing the old value.
+    playlistModel.set(index, {
+      entryIndex: row.entryIndex,
+      title: row.title,
+      videoId: row.videoId,
+      selected: !row.selected
+    })
+    root.playlistSelectedCount = root.countSelectedPlaylist()
+  }
+
+  function selectAllPlaylist() {
+    for (var i = 0; i < playlistModel.count; i++) {
+      var row = playlistModel.get(i)
+      if (!row.selected) {
+        playlistModel.set(i, {
+          entryIndex: row.entryIndex,
+          title: row.title,
+          videoId: row.videoId,
+          selected: true
+        })
+      }
+    }
+    root.playlistSelectedCount = playlistModel.count
+  }
+
+  function selectNonePlaylist() {
+    for (var i = 0; i < playlistModel.count; i++) {
+      var row = playlistModel.get(i)
+      if (row.selected) {
+        playlistModel.set(i, {
+          entryIndex: row.entryIndex,
+          title: row.title,
+          videoId: row.videoId,
+          selected: false
+        })
+      }
+    }
+    root.playlistSelectedCount = 0
   }
 
   // ---- yt-dlp output parsing ----------------------------------------------
@@ -265,7 +383,10 @@ Panel {
       return
     }
     var pl = Model.parsePlaylistProgress(line)
-    if (pl) root.dlPlaylist = "Playlist " + pl.current + " of " + pl.total
+    if (pl) {
+      root.dlPlaylistTotal = pl.total
+      root.dlPlaylistDone = Math.max(0, pl.current - 1)
+    }
   }
 
   function handleDlExit(exitCode) {
@@ -292,6 +413,7 @@ Panel {
     root.dlState = "done"
     root.dlProgress = 100
     root.dlIndeterminate = false
+    if (root.dlPlaylistTotal > 0) root.dlPlaylistDone = root.dlPlaylistTotal
     root.dlStatus = "Saved — " + (root.dlFile ? Model.fileBaseName(root.dlFile) : "to " + root.downloadDir)
 
     var file = root.dlFile || ""
@@ -329,7 +451,7 @@ Panel {
     if (root.dlState === "idle") return root.statusHint !== "" ? root.statusHint : ("Saves to " + root.downloadDir)
     if (root.dlState === "running") {
       var parts = []
-      if (root.dlPlaylist) parts.push(root.dlPlaylist)
+      if (root.dlPlaylistTotal > 0) parts.push("Playlist " + root.dlPlaylistDone + "/" + root.dlPlaylistTotal + " done")
       parts.push(root.dlPhase || "Downloading")
       if (!root.dlIndeterminate && root.dlProgress > 0) parts.push(Math.round(root.dlProgress) + "%")
       return parts.join(" · ")
@@ -383,9 +505,45 @@ Panel {
         root.autoPaste = false
         urlField.forceActiveFocus()
         urlField.selectAll()
+        playlistDebounce.restart()
       }
     }
     stderr: StdioCollector { waitForEnd: true }
+  }
+
+  // Flat-lists the videos of a pasted playlist URL so the panel can offer
+  // "all or pick". Runs only when the URL looks like a playlist.
+  Process {
+    id: listProc
+    stdout: SplitParser { onRead: function(data) { root.addPlaylistLine(String(data)) } }
+    stderr: StdioCollector { waitForEnd: true }
+    onExited: function(exitCode) {
+      root.playlistLoading = false
+      root.playlistCount = playlistModel.count
+      root.playlistSelectedCount = playlistModel.count
+      if (root.playlistTotal === 0) root.playlistTotal = root.playlistCount
+      if (exitCode !== 0 || playlistModel.count === 0) {
+        root.playlistMode = false
+        root.lastListedUrl = ""
+        playlistModel.clear()
+        root.playlistLoaded = 0
+        root.playlistTotal = 0
+        root.playlistCount = 0
+        root.playlistSelectedCount = 0
+        root.statusHint = "Could not read the playlist."
+      }
+    }
+  }
+
+  Timer {
+    id: playlistDebounce
+    interval: 500
+    repeat: false
+    onTriggered: root.maybeRefreshPlaylist()
+  }
+
+  ListModel {
+    id: playlistModel
   }
 
   FileView {
@@ -472,6 +630,7 @@ Panel {
           accent: root.accent
           placeholderText: "Paste a video URL…"
           verticalPadding: 6
+          onTextChanged: playlistDebounce.restart()
           onAccepted: if (!root.running) root.startDownload()
         }
 
@@ -527,7 +686,7 @@ Panel {
             anchors.fill: parent
             hoverEnabled: true
             cursorShape: Qt.PointingHandCursor
-            onClicked: root.toggleChip("audioOnly")
+            onClicked: root.toggleAudio()
           }
 
           Text {
@@ -567,135 +726,57 @@ Panel {
         }
       }
 
-      // ---- playlist / trim chips ---------------------------------------------------
-      Row {
+      // ---- trim chip ---------------------------------------------------------------
+      BorderSurface {
         width: parent.width
         height: Style.spacing.controlHeight
-        spacing: Style.spacing.md
+        radius: Style.cornerRadius
+        borderSpec: Border.controlSpec("normal", root.contentForeground, root.accent)
+        color: trimMouse.containsMouse ? Style.hoverFillFor(root.contentForeground, root.accent) : "transparent"
 
-        BorderSurface {
-          width: (parent.width - parent.spacing) / 2
-          height: parent.height
-          radius: Style.cornerRadius
-          borderSpec: Border.controlSpec("normal", root.contentForeground, root.accent)
-          color: playlistMouse.containsMouse ? Style.hoverFillFor(root.contentForeground, root.accent) : "transparent"
+        Behavior on color { ColorAnimation { duration: 90 } }
 
-          Behavior on color { ColorAnimation { duration: 90 } }
-
-          MouseArea {
-            id: playlistMouse
-            anchors.fill: parent
-            hoverEnabled: true
-            cursorShape: Qt.PointingHandCursor
-            onClicked: root.toggleChip("playlist")
-          }
-
-          Text {
-            anchors.left: parent.left
-            anchors.leftMargin: Style.spacing.controlPaddingX
-            anchors.verticalCenter: parent.verticalCenter
-            text: "󰐷"
-            color: root.accent
-            font.family: root.contentFontFamily
-            font.pixelSize: Style.font.iconSmall
-          }
-
-          Text {
-            anchors.left: parent.left
-            anchors.leftMargin: Style.spacing.controlPaddingX + Style.font.iconSmall + Style.spacing.xs
-            anchors.right: playlistSwitch.left
-            anchors.rightMargin: Style.spacing.xs
-            anchors.verticalCenter: parent.verticalCenter
-            text: "Playlist"
-            color: Qt.darker(root.contentForeground, 1.3)
-            font.family: root.contentFontFamily
-            font.pixelSize: Style.font.caption
-            elide: Text.ElideRight
-          }
-
-          ToggleSwitch {
-            id: playlistSwitch
-            anchors.right: parent.right
-            anchors.rightMargin: Style.spacing.controlPaddingX
-            anchors.verticalCenter: parent.verticalCenter
-            checked: root.playlist
-            interactive: false
-            foreground: root.contentForeground
-            accent: root.accent
-            trackHeight: Math.round(Style.spacing.controlHeight * 0.5)
-          }
+        MouseArea {
+          id: trimMouse
+          anchors.fill: parent
+          hoverEnabled: true
+          cursorShape: Qt.PointingHandCursor
+          onClicked: root.toggleTrim()
         }
 
-        BorderSurface {
-          width: (parent.width - parent.spacing) / 2
-          height: parent.height
-          radius: Style.cornerRadius
-          borderSpec: Border.controlSpec("normal", root.contentForeground, root.accent)
-          color: trimMouse.containsMouse ? Style.hoverFillFor(root.contentForeground, root.accent) : "transparent"
-
-          Behavior on color { ColorAnimation { duration: 90 } }
-
-          MouseArea {
-            id: trimMouse
-            anchors.fill: parent
-            hoverEnabled: true
-            cursorShape: Qt.PointingHandCursor
-            onClicked: root.toggleChip("trim")
-          }
-
-          Text {
-            anchors.left: parent.left
-            anchors.leftMargin: Style.spacing.controlPaddingX
-            anchors.verticalCenter: parent.verticalCenter
-            text: "󰑰"
-            color: root.accent
-            font.family: root.contentFontFamily
-            font.pixelSize: Style.font.iconSmall
-          }
-
-          Text {
-            anchors.left: parent.left
-            anchors.leftMargin: Style.spacing.controlPaddingX + Style.font.iconSmall + Style.spacing.xs
-            anchors.right: trimSwitch.left
-            anchors.rightMargin: Style.spacing.xs
-            anchors.verticalCenter: parent.verticalCenter
-            text: "Trim range"
-            color: Qt.darker(root.contentForeground, 1.3)
-            font.family: root.contentFontFamily
-            font.pixelSize: Style.font.caption
-            elide: Text.ElideRight
-          }
-
-          ToggleSwitch {
-            id: trimSwitch
-            anchors.right: parent.right
-            anchors.rightMargin: Style.spacing.controlPaddingX
-            anchors.verticalCenter: parent.verticalCenter
-            checked: root.trim
-            interactive: false
-            foreground: root.contentForeground
-            accent: root.accent
-            trackHeight: Math.round(Style.spacing.controlHeight * 0.5)
-          }
+        Text {
+          anchors.left: parent.left
+          anchors.leftMargin: Style.spacing.controlPaddingX
+          anchors.verticalCenter: parent.verticalCenter
+          text: "󰑰"
+          color: root.accent
+          font.family: root.contentFontFamily
+          font.pixelSize: Style.font.iconSmall
         }
-      }
 
-      // ---- playlist items (when playlist on) ---------------------------------------
-      Row {
-        visible: root.playlist
-        width: parent.width
-        height: visible ? Style.spacing.controlHeight : 0
-        spacing: Style.spacing.md
+        Text {
+          anchors.left: parent.left
+          anchors.leftMargin: Style.spacing.controlPaddingX + Style.font.iconSmall + Style.spacing.xs
+          anchors.right: trimSwitch.left
+          anchors.rightMargin: Style.spacing.xs
+          anchors.verticalCenter: parent.verticalCenter
+          text: "Trim range"
+          color: Qt.darker(root.contentForeground, 1.3)
+          font.family: root.contentFontFamily
+          font.pixelSize: Style.font.caption
+          elide: Text.ElideRight
+        }
 
-        TextField {
-          width: parent.width
-          height: parent.height
+        ToggleSwitch {
+          id: trimSwitch
+          anchors.right: parent.right
+          anchors.rightMargin: Style.spacing.controlPaddingX
+          anchors.verticalCenter: parent.verticalCenter
+          checked: root.trim
+          interactive: false
           foreground: root.contentForeground
           accent: root.accent
-          text: root.playlistItems
-          placeholderText: "Playlist items — 1,3,5-8 (empty = all)"
-          verticalPadding: 6
-          onEditingFinished: root.persist({ playlistItems: text })
+          trackHeight: Math.round(Style.spacing.controlHeight * 0.5)
         }
       }
 
@@ -726,6 +807,156 @@ Panel {
           placeholderText: "end · 2:45"
           verticalPadding: 6
           onEditingFinished: root.persist({ trimEnd: text })
+        }
+      }
+
+      // ---- playlist (auto-detected from a playlist URL) ------------------------------
+      Column {
+        visible: root.playlistMode
+        width: parent.width
+        spacing: Style.spacing.xs
+
+        Row {
+          visible: root.playlistLoading
+          width: parent.width
+          spacing: Style.spacing.sm
+
+          ProgressRing {
+            anchors.verticalCenter: parent.verticalCenter
+            width: Style.space(18)
+            height: Style.space(18)
+            color: root.contentForeground
+            accent: root.accent
+            progress: root.playlistTotal > 0 ? root.playlistLoaded / root.playlistTotal : -1
+          }
+
+          Text {
+            anchors.verticalCenter: parent.verticalCenter
+            text: root.playlistTotal > 0
+              ? "Loading playlist · " + root.playlistLoaded + "/" + root.playlistTotal
+              : "Loading playlist…"
+            color: Qt.darker(root.contentForeground, 1.3)
+            font.family: root.contentFontFamily
+            font.pixelSize: Style.font.caption
+          }
+        }
+
+        Column {
+          visible: !root.playlistLoading
+          width: parent.width
+          spacing: Style.spacing.xs
+
+          Row {
+            width: parent.width
+            spacing: Style.spacing.sm
+
+            PanelSectionHeader {
+              text: "PLAYLIST · " + root.playlistCount + " VIDEOS"
+              foreground: root.contentForeground
+              fontFamily: root.contentFontFamily
+            }
+
+            Item { width: 1; height: 1 }
+
+            Text {
+              anchors.verticalCenter: parent.verticalCenter
+              text: root.playlistSelectedCount + "/" + root.playlistCount + " selected"
+              color: Qt.darker(root.contentForeground, 1.5)
+              font.family: root.contentFontFamily
+              font.pixelSize: Style.font.caption
+            }
+
+            Button {
+              width: Style.space(34)
+              height: Style.space(20)
+              text: "All"
+              foreground: root.contentForeground
+              accent: root.accent
+              fontFamily: root.contentFontFamily
+              fontSize: Style.font.caption
+              onClicked: root.selectAllPlaylist()
+            }
+
+            Button {
+              width: Style.space(42)
+              height: Style.space(20)
+              text: "None"
+              foreground: root.contentForeground
+              accent: root.accent
+              fontFamily: root.contentFontFamily
+              fontSize: Style.font.caption
+              onClicked: root.selectNonePlaylist()
+            }
+          }
+
+          ListView {
+            id: playlistList
+            width: parent.width
+            height: Math.min(playlistModel.count, 6) * Style.space(30)
+            model: playlistModel
+            clip: true
+            spacing: Style.spacing.xs
+            boundsBehavior: Flickable.StopAtBounds
+            interactive: playlistModel.count > 6
+
+            delegate: Rectangle {
+              required property int entryIndex
+              required property string title
+              required property bool selected
+
+              readonly property int rowIndex: index
+
+              width: ListView.view.width
+              height: Style.space(30)
+              radius: Style.cornerRadius
+              color: rowMouse.containsMouse ? Style.hoverFillFor(root.contentForeground, root.accent) : "transparent"
+
+              Behavior on color { ColorAnimation { duration: 90 } }
+
+              MouseArea {
+                id: rowMouse
+                anchors.fill: parent
+                hoverEnabled: true
+                cursorShape: Qt.PointingHandCursor
+                onClicked: root.togglePlaylistEntry(rowIndex)
+              }
+
+              ToggleSwitch {
+                anchors.left: parent.left
+                anchors.leftMargin: Style.spacing.controlPaddingX
+                anchors.verticalCenter: parent.verticalCenter
+                checked: selected
+                interactive: false
+                foreground: root.contentForeground
+                accent: root.accent
+                trackHeight: Math.round(Style.space(14))
+              }
+
+              Text {
+                anchors.left: parent.left
+                anchors.leftMargin: Style.spacing.controlPaddingX + Style.space(30)
+                anchors.verticalCenter: parent.verticalCenter
+                text: entryIndex < 10 ? "0" + entryIndex : String(entryIndex)
+                color: Qt.darker(root.contentForeground, 1.6)
+                font.family: root.contentFontFamily
+                font.pixelSize: Style.font.caption
+                font.bold: true
+              }
+
+              Text {
+                anchors.left: parent.left
+                anchors.leftMargin: Style.spacing.controlPaddingX + Style.space(30) + Style.space(30)
+                anchors.right: parent.right
+                anchors.rightMargin: Style.spacing.controlPaddingX
+                anchors.verticalCenter: parent.verticalCenter
+                text: title
+                color: selected ? root.contentForeground : Qt.darker(root.contentForeground, 1.5)
+                font.family: root.contentFontFamily
+                font.pixelSize: Style.font.bodySmall
+                elide: Text.ElideRight
+              }
+            }
+          }
         }
       }
 
@@ -822,7 +1053,7 @@ Panel {
           foreground: root.accent
           accent: root.accent
           selected: !root.running
-          enabled: !root.running
+          enabled: !root.running && !(root.playlistMode && root.playlistLoading)
           fontFamily: root.contentFontFamily
           onClicked: root.startDownload()
         }
