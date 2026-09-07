@@ -1,11 +1,24 @@
-# OmaVideos
+<table>
+<tr>
+<td><img src="preview.png" width="72" alt="OmaVideos logo"/></td>
+<td>
+
+## OmaVideos
 
 A minimal bar-widget for Omarchy that turns a pasted URL into a finished
 download. Paste a YouTube, Reddit, X, Vimeo, Twitch — or any other yt-dlp
 supported URL — and it lands in your `omavideos` folder at the best quality
 with audio, while the bar arrow glows until it is done.
 
-![OmaVideos preview](preview.png)
+</td>
+</tr>
+</table>
+
+## Screenshots
+
+| The bar arrow + panel | Downloading with progress |
+|---|---|
+| ![Download panel](assets/screenshot-1.png) | ![Progress](assets/screenshot-2.png) |
 
 ## Features
 
@@ -117,7 +130,8 @@ OmaPlayButton.qml Theme-aware bar icon that lights up with download progress
 OmaVideoMark.qml Theme-aware Omarchy+play mark (panel hero)
 Model.js        yt-dlp command builder, parsers, recent-store helpers
 assets/logo.svg Brand mark
-preview.png     Notification icon / README preview
+assets/screenshot-*.png Showcase screenshots
+preview.png     Notification icon / README logo
 ```
 
 ## License
