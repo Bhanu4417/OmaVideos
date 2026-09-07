@@ -101,6 +101,7 @@ BarWidget {
     function toggle(): void { root.togglePanel() }
     function download(url: string): void { root.openWithUrl(url) }
     function paste(): void { root.pasteFromClipboard() }
+    function sel(pos: string): void { if (panelLoader.item) panelLoader.item.selItem(String(pos)) }
   }
 
   BarIconButton {

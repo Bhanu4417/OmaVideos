@@ -1,0 +1,9 @@
+# local state / downloads never belong in the repo
+*.bak
+*~
+*.swp
+.DS_Store
+
+# Omarchy runtime state (kept under ~/.local/state, but just in case)
+*.recent.json
+omavideos-recent.json

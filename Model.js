@@ -182,6 +182,22 @@ function isErrorLine(line) {
   return line.indexOf("ERROR:") !== -1
 }
 
+// Turn a raw yt-dlp ERROR line into a short, human-readable message.
+function friendlyError(raw) {
+  var e = String(raw || "").trim()
+  if (!e) return "Download failed."
+  e = e.replace(/^ERROR:\s*/i, "")
+  // strip the "[extractor] <identifier>: " prefix
+  e = e.replace(/^\[[a-z0-9_+\-]+\]\s+[^\s]+:\s*/i, "")
+  if (/unsupported url/i.test(e)) return "This doesn't look like a supported video URL."
+  if (/google-site-verification|site verification|generic information extractor/i.test(e))
+    return "This URL isn't a downloadable video (blocked or not supported)."
+  if (/HTTP Error 403|403 forbidden/i.test(e)) return "The site refused the download (403). Try another video or update yt-dlp."
+  if (/this video is unavailable/i.test(e)) return "This video is unavailable (removed, region-locked, or bot-check)."
+  if (/unable to download/i.test(e)) return "Unable to download the video data from this site right now."
+  return e
+}
+
 function parsePlaylistProgress(line) {
   var m = /\[Playlist\] Downloading item (\d+) of (\d+)/.exec(line)
   return m ? { current: parseInt(m[1], 10), total: parseInt(m[2], 10) } : null

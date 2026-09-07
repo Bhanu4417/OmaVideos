@@ -1,10 +1,8 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 24 24">
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="-2 -2 28 28">
   <!-- OmaVideos: Omarchy ring + play triangle, theme tones, no background -->
-  <g transform="translate(76 76) scale(15)">
-    <path fill="#d9dcde" fill-rule="evenodd"
-          d="M 0 0 v 24 h 12.8 v -3.2 h 8 V 3.2 h -3.2 v 1.6 h 1.6 v 14.4 H 4.8 V 4.8 h 8 V 1.6 h 9.6 v 20.8 h -8 V 24 H 24 V 0 Z
-             M 1.6 1.6 h 9.6 v 1.6 h -8 v 8 H 1.6 Z
-             M 1.6 12.8 h 1.6 v 8 h 8 v 1.6 H 1.6 Z"/>
-    <path fill="#9db2e8" d="M 9.5 7.5 L 17 12 L 9.5 16.5 Z"/>
-  </g>
+  <path fill="#d9dcde" fill-rule="evenodd"
+        d="M 0 0 v 24 h 12.8 v -3.2 h 8 V 3.2 h -3.2 v 1.6 h 1.6 v 14.4 H 4.8 V 4.8 h 8 V 1.6 h 9.6 v 20.8 h -8 V 24 H 24 V 0 Z
+           M 1.6 1.6 h 9.6 v 1.6 h -8 v 8 H 1.6 Z
+           M 1.6 12.8 h 1.6 v 8 h 8 v 1.6 H 1.6 Z"/>
+  <path fill="#9db2e8" d="M 9.5 7.5 L 17 12 L 9.5 16.5 Z"/>
 </svg>

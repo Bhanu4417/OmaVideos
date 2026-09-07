@@ -72,6 +72,8 @@ Panel {
   property string dlError: ""
   property string dlState: "idle"   // idle | running | done | error
   property var pendingDlArgs: []
+  property var dlQueue: []
+  property int dlQueueIndex: 0
   property var recent: []
 
   function boolSetting(name, fallback) {
@@ -160,27 +162,46 @@ Panel {
     }
 
     // Playlist: build the item list from the selection. All selected means a
-    // plain full-playlist download; otherwise pass just the picked entries.
+    // plain full-playlist download; a partial selection downloads each picked
+    // video by its own ID so a dynamic playlist (auto-mix) can't reorder and
+    // swap a different one in.
     var items = ""
-    var playlistMode = root.playlistMode && root.playlistCount > 0
-    if (playlistMode) {
-      if (root.playlistLoading) {
-        root.dlState = "idle"
-        root.statusHint = "Loading playlist…"
-        return
-      }
-      if (root.playlistSelectedCount === 0) {
-        root.dlState = "idle"
-        root.statusHint = "Select at least one video."
-        return
-      }
-      if (root.playlistSelectedCount < root.playlistCount) {
-        var picked = []
-        for (var i = 0; i < playlistModel.count; i++) {
-          var row = playlistModel.get(i)
-          if (row.selected) picked.push(String(row.entryIndex))
+    var playlistMode = false
+    if (root.dlQueueIndex === 0) {
+      playlistMode = root.playlistMode && root.playlistCount > 0
+      if (playlistMode) {
+        if (root.playlistLoading) {
+          root.dlState = "idle"
+          root.statusHint = "Loading playlist…"
+          return
         }
-        items = picked.join(",")
+        if (root.playlistSelectedCount === 0) {
+          root.dlState = "idle"
+          root.statusHint = "Select at least one video."
+          return
+        }
+        if (root.playlistSelectedCount < root.playlistCount) {
+          var pickedUrls = []
+          for (var i = 0; i < playlistModel.count; i++) {
+            var row = playlistModel.get(i)
+            if (row.selected && row.videoId) {
+              var vurl = "https://www.youtube.com/watch?v=" + row.videoId
+              if (pickedUrls.indexOf(vurl) === -1) pickedUrls.push(vurl)
+            }
+          }
+          if (pickedUrls.length > 0) {
+            root.dlQueue = pickedUrls
+            root.dlQueueIndex = 0
+            url = pickedUrls[0]
+            playlistMode = false
+          } else {
+            root.dlQueue = []
+            root.dlQueueIndex = 0
+          }
+        } else {
+          root.dlQueue = []
+          root.dlQueueIndex = 0
+        }
       }
     }
 
@@ -299,18 +320,31 @@ Panel {
     return n
   }
 
-  function togglePlaylistEntry(index) {
-    if (index < 0 || index >= playlistModel.count) return
-    var row = playlistModel.get(index)
-    // Build a fresh object for set(): mutating the get() result in place can
-    // leave the ListView showing the old value.
-    playlistModel.set(index, {
-      entryIndex: row.entryIndex,
-      title: row.title,
-      videoId: row.videoId,
-      selected: !row.selected
-    })
+  function togglePlaylistEntry(position) {
+    // The delegate's built-in `index` is unreliable with required-property
+    // delegates (always 0), so rows carry their playlist position and we look
+    // the model row up by it.
+    for (var i = 0; i < playlistModel.count; i++) {
+      var row = playlistModel.get(i)
+      if (row.entryIndex !== position) continue
+      playlistModel.set(i, {
+        entryIndex: row.entryIndex,
+        title: row.title,
+        videoId: row.videoId,
+        selected: !row.selected
+      })
+      break
+    }
     root.playlistSelectedCount = root.countSelectedPlaylist()
+  }
+
+  function selItem(pos) {
+    var p = parseInt(String(pos || ""), 10)
+    if (!isFinite(p)) return
+    root.togglePlaylistEntry(p)
+    var found = -1
+    for (var i = 0; i < playlistModel.count; i++) if (playlistModel.get(i).entryIndex === p) found = i
+    console.log("omavideos SEL toggled entry", p, "selected", found >= 0 ? playlistModel.get(found).selected : "?")
   }
 
   function selectAllPlaylist() {
@@ -405,7 +439,7 @@ Panel {
       root.running = false
       root.dlState = "error"
       root.dlIndeterminate = false
-      root.dlStatus = root.dlError || "Download failed (exit " + exitCode + ")."
+      root.dlStatus = Model.friendlyError(root.dlError) || "Download failed (exit " + exitCode + ")."
       return
     }
 
@@ -422,6 +456,16 @@ Panel {
     recentFile.setText(Model.recentToJson(root.recent))
 
     root.notifyComplete(file)
+
+    // Continue through the selected-video queue, if any.
+    if (root.dlQueueIndex < root.dlQueue.length - 1) {
+      root.dlQueueIndex++
+      urlField.text = root.dlQueue[root.dlQueueIndex]
+      Qt.callLater(root.startDownload)
+      return
+    }
+    root.dlQueue = []
+    root.dlQueueIndex = 0
   }
 
   function notifyComplete(file) {
@@ -430,7 +474,7 @@ Panel {
     var title = Model.fileBaseName(file) || "Playlist saved"
     var body = root.downloadDir
     Quickshell.execDetached([om + "/bin/omarchy-notification-send",
-      "-a", "OmaVideos", "-u", "normal", "-t", "8000", "-i", icon,
+      "--app-name", "OmaVideos", "-u", "normal", "--image", icon,
       "Download complete", title + " — " + body])
   }
 
@@ -904,8 +948,6 @@ Panel {
               required property string title
               required property bool selected
 
-              readonly property int rowIndex: index
-
               width: ListView.view.width
               height: Style.space(30)
               radius: Style.cornerRadius
@@ -918,7 +960,7 @@ Panel {
                 anchors.fill: parent
                 hoverEnabled: true
                 cursorShape: Qt.PointingHandCursor
-                onClicked: root.togglePlaylistEntry(rowIndex)
+                onClicked: root.togglePlaylistEntry(entryIndex)
               }
 
               ToggleSwitch {
