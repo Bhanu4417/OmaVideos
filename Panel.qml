@@ -154,6 +154,12 @@ Panel {
 
   function startDownload() {
     if (root.running) return
+    if (root.depsChecked && (!root.hasYtdlp || !root.hasFfmpeg)) {
+      root.dlState = "error"
+      root.dlIndeterminate = false
+      root.dlStatus = root.missingDepsMessage
+      return
+    }
     var url = String(urlField.text || "").trim()
     if (!url) {
       root.dlState = "idle"
@@ -439,7 +445,8 @@ Panel {
       root.running = false
       root.dlState = "error"
       root.dlIndeterminate = false
-      root.dlStatus = Model.friendlyError(root.dlError) || "Download failed (exit " + exitCode + ")."
+      if (exitCode === 127) root.dlStatus = "yt-dlp is not installed — run: omarchy pkg add yt-dlp ffmpeg"
+      else root.dlStatus = Model.friendlyError(root.dlError) || "Download failed (exit " + exitCode + ")."
       return
     }
 
@@ -491,7 +498,17 @@ Panel {
   // ---- status line ----------------------------------------------------------
   property string statusHint: ""
   property string dlStatus: ""
+  property bool hasYtdlp: false
+  property bool hasFfmpeg: false
+  property bool depsChecked: false
+  readonly property string missingDepsMessage: {
+    var missing = []
+    if (!root.hasYtdlp) missing.push("yt-dlp")
+    if (!root.hasFfmpeg) missing.push("ffmpeg")
+    return "Missing: " + missing.join(", ") + " — install with: omarchy pkg add " + missing.join(" ")
+  }
   readonly property string statusLine: {
+    if (root.depsChecked && (!root.hasYtdlp || !root.hasFfmpeg)) return root.missingDepsMessage
     if (root.dlState === "idle") return root.statusHint !== "" ? root.statusHint : ("Saves to " + root.downloadDir)
     if (root.dlState === "running") {
       var parts = []
@@ -516,6 +533,22 @@ Panel {
   }
 
   // ---- sub-processes ---------------------------------------------------------
+  // Dependency probe: is yt-dlp / ffmpeg on PATH? Runs once at load so the
+  // panel can say "install with omarchy pkg add …" instead of a raw exit 127.
+  Process {
+    id: depsProc
+    command: ["sh", "-c", "command -v yt-dlp >/dev/null 2>&1 && echo ytdlp=yes || echo ytdlp=no; command -v ffmpeg >/dev/null 2>&1 && echo ffmpeg=yes || echo ffmpeg=no"]
+    running: true
+    stdout: StdioCollector { id: depsOut; waitForEnd: true }
+    stderr: StdioCollector { waitForEnd: true }
+    onExited: function() {
+      var out = String(depsOut.text || "")
+      root.hasYtdlp = out.indexOf("ytdlp=yes") !== -1
+      root.hasFfmpeg = out.indexOf("ffmpeg=yes") !== -1
+      root.depsChecked = true
+    }
+  }
+
   Process {
     id: mkdirProc
     stdout: StdioCollector { waitForEnd: true }
